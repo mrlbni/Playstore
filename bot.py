@@ -17,16 +17,22 @@ def extract_package(url):
     match = re.search(r"id=([a-zA-Z0-9._]+)", url)
     return match.group(1) if match else None
 
-def get_download_link(package):
-    # apkcombo API (working)
+
+def get_apkcombo_link(package):
     return f"https://apkcombo.com/api/v1/app/download?package_name={package}&device=android"
+
+
+def fallback_apkpure(package):
+    return f"https://d.apkpure.com/b/APK/{package}?version=latest"
+
 
 @app.on_message(filters.command("start"))
 async def start(client, message):
     await message.reply_text("✅ Send Play Store link")
 
+
 @app.on_message(filters.text & ~filters.command(["start"]))
-async def apk_download(client, message):
+async def download(client, message):
     url = message.text.strip()
 
     if "play.google.com" not in url:
@@ -36,21 +42,32 @@ async def apk_download(client, message):
     if not package:
         return await message.reply_text("❌ Package not found")
 
-    msg = await message.reply_text("🔍 Fetching APK link...")
+    msg = await message.reply_text("🔍 Fetching download link...")
+
+    download_url = None
 
     try:
-        api_url = get_download_link(package)
-        res = requests.get(api_url, headers=HEADERS).json()
+        # Try APKCombo API
+        api_url = get_apkcombo_link(package)
+        res = requests.get(api_url, headers=HEADERS)
 
-        if not res.get("ok"):
-            return await msg.edit("❌ App not found")
+        if "application/json" in res.headers.get("Content-Type", ""):
+            data = res.json()
+            if data.get("ok"):
+                download_url = data["result"]["download_url"]
 
-        download_url = res["result"]["download_url"]
+    except:
+        pass
 
-        file_name = f"{package}.apk"
+    # Fallback to APKPure
+    if not download_url:
+        download_url = fallback_apkpure(package)
 
-        await msg.edit("⬇️ Downloading APK...")
+    file_name = f"{package}.apk"
 
+    await msg.edit("⬇️ Downloading APK...")
+
+    try:
         r = requests.get(download_url, headers=HEADERS, stream=True)
 
         total = 0
@@ -60,10 +77,11 @@ async def apk_download(client, message):
                     f.write(chunk)
                     total += len(chunk)
 
-        if total < 100000:  # less than 100KB = error page
-            return await msg.edit("❌ Failed (blocked or invalid file)")
+        # Check valid file
+        if total < 100000:
+            return await msg.edit("❌ Failed: blocked or invalid APK")
 
-        await msg.edit("📤 Uploading to Telegram...")
+        await msg.edit("📤 Uploading...")
 
         await client.send_document(
             message.chat.id,
@@ -75,6 +93,7 @@ async def apk_download(client, message):
         await msg.delete()
 
     except Exception as e:
-        await msg.edit(f"❌ Error:\n{str(e)}")
+        await msg.edit(f"❌ Download Error:\n{str(e)}")
+
 
 app.run()
